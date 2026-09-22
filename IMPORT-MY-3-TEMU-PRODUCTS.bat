@@ -37,17 +37,17 @@ if errorlevel 1 (
 echo.
 echo Importing product 1 of 3...
 call npm run import:temu -- "https://www.temu.com/espresso-machine-with-grinder-professional-coffee-maker-for-latte-cappuccino-with-milk-frother-steam-wand-removable-water-tank-for-home-g-605596761851539.html"
-if errorlevel 1 echo Product 1 had an import error.
+if errorlevel 1 (\n  echo Product 1 had an import error. Stopping.\n  pause\n  exit /b 1\n)
 
 echo.
 echo Importing product 2 of 3...
 call npm run import:temu -- "https://www.temu.com/-espresso-machine-15-bar-coffee-maker-with-milk-frother-steam-wand-built-in-bean-grinder-combo-cappuccino-machine-with-70oz-removable-water-tank-abs-high-strength-plastic-shell-g-601099704667803.html"
-if errorlevel 1 echo Product 2 had an import error.
+if errorlevel 1 (\n  echo Product 2 had an import error. Stopping.\n  pause\n  exit /b 1\n)
 
 echo.
 echo Importing product 3 of 3...
 call npm run import:temu -- "https://www.temu.com/1350w-20-machine-instant-heating-system-espresso-maker-with-milk-frother-fast-brew-italian--machine-for-latte-cappuccino-1-6l-removable-water-tank--g-606623779151957.html"
-if errorlevel 1 echo Product 3 had an import error.
+if errorlevel 1 (\n  echo Product 3 had an import error. Stopping.\n  pause\n  exit /b 1\n)
 
 echo.
 echo ============================================================
