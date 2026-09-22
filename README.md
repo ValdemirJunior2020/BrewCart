@@ -4,6 +4,7 @@ BrewCart is a modern ecommerce marketplace project focused first on coffee produ
 
 ## Current direction
 
+- Mobile-first is a hard requirement. The phone experience is designed first and desktop expands from it.
 - Frontend: Next.js + React + TypeScript + Tailwind CSS
 - Backend: Node.js / TypeScript
 - Database: PostgreSQL + Prisma
@@ -11,6 +12,10 @@ BrewCart is a modern ecommerce marketplace project focused first on coffee produ
 - Frontend deployment: Netlify
 - Backend/database: Render
 - Goal: keep the core simple enough for one person to operate while still supporting products, orders, inventory, suppliers, coupons, search, analytics, and admin tools.
+
+## UX direction
+
+See [docs/MOBILE_FIRST_UX.md](docs/MOBILE_FIRST_UX.md) for BrewCart's mobile-first shopping, navigation, product, checkout, tactile design, personalization, and future 3D/360-product-view requirements.
 
 ## Open-source research
 
