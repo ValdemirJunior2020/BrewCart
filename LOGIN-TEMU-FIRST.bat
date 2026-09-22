@@ -3,47 +3,50 @@ setlocal
 title BrewCart - Temu Login Setup
 cd /d "%~dp0"
 
-set "CHROME="
+set "FIREFOX="
 
-if exist "%ProgramFiles%\Google\Chrome\Application\chrome.exe" (
-  set "CHROME=%ProgramFiles%\Google\Chrome\Application\chrome.exe"
+if exist "%ProgramFiles%\Mozilla Firefox\firefox.exe" (
+  set "FIREFOX=%ProgramFiles%\Mozilla Firefox\firefox.exe"
 )
 
-if not defined CHROME if exist "%ProgramFiles(x86)%\Google\Chrome\Application\chrome.exe" (
-  set "CHROME=%ProgramFiles(x86)%\Google\Chrome\Application\chrome.exe"
+if not defined FIREFOX if exist "%ProgramFiles(x86)%\Mozilla Firefox\firefox.exe" (
+  set "FIREFOX=%ProgramFiles(x86)%\Mozilla Firefox\firefox.exe"
 )
 
-if not defined CHROME if exist "%LocalAppData%\Google\Chrome\Application\chrome.exe" (
-  set "CHROME=%LocalAppData%\Google\Chrome\Application\chrome.exe"
+if not defined FIREFOX if exist "%LocalAppData%\Mozilla Firefox\firefox.exe" (
+  set "FIREFOX=%LocalAppData%\Mozilla Firefox\firefox.exe"
 )
 
-if not defined CHROME (
-  echo Google Chrome was not found.
+if not defined FIREFOX (
+  echo Mozilla Firefox was not found.
+  echo Install Firefox, then run this file again.
   pause
   exit /b 1
 )
 
+if not exist "%CD%\.temu-firefox-profile" mkdir "%CD%\.temu-firefox-profile"
+
 echo.
 echo ============================================================
-echo   TEMU LOGIN - NORMAL CHROME
+echo   TEMU LOGIN - NORMAL FIREFOX
 echo ============================================================
 echo.
-echo A NORMAL Chrome window will open.
+echo A NORMAL Firefox window will open.
 echo.
-echo 1. Log into Temu normally. Google login should work here.
-echo 2. Make sure you can see a Temu product page while logged in.
-echo 3. CLOSE that Chrome window completely.
+echo 1. Log into Temu normally.
+echo 2. Make sure you can open one of the Temu product pages.
+echo 3. CLOSE that Firefox window completely.
 echo 4. Come back here and press ENTER.
 echo.
-echo Do NOT press Enter until the Temu Chrome window is CLOSED.
+echo Do NOT press Enter until Firefox is CLOSED.
 echo.
 
-start "" "%CHROME%" --user-data-dir="%CD%\.temu-browser-profile" "https://www.temu.com/"
+start "" "%FIREFOX%" -no-remote -profile "%CD%\.temu-firefox-profile" "https://www.temu.com/"
 
 pause
 
 echo.
-echo Login profile saved.
+echo Temu Firefox profile saved.
 echo Now run:
 echo IMPORT-MY-3-TEMU-PRODUCTS.bat
 echo.
