@@ -1,68 +1,69 @@
-import { firefox } from "playwright";
 import fs from "node:fs/promises";
+import { existsSync } from "node:fs";
 import path from "node:path";
 import process from "node:process";
+import { Builder } from "selenium-webdriver";
+import firefox from "selenium-webdriver/firefox.js";
 
-const args = process.argv.slice(2).filter(Boolean);
+const urls = process.argv.slice(2).filter(Boolean);
 
-if (!args.length) {
-  console.error("Usage: npm run import:temu -- <temu-product-url> [more urls...]");
+if (!urls.length) {
+  console.error("No Temu product URL supplied.");
   process.exit(1);
 }
 
 function productIdFromUrl(value) {
-  const match = value.match(/-g-(\d+)\.html/i);
-  return match?.[1] || ("temu-" + Date.now());
+  return value.match(/-g-(\d+)\.html/i)?.[1] || ("temu-" + Date.now());
+}
+
+function getFirefoxBinary() {
+  const candidates = [
+    process.env.FIREFOX_BIN,
+    "C:\\Program Files\\Mozilla Firefox\\firefox.exe",
+    "C:\\Program Files (x86)\\Mozilla Firefox\\firefox.exe",
+    path.join(process.env.LOCALAPPDATA || "", "Mozilla Firefox", "firefox.exe")
+  ].filter(Boolean);
+
+  return candidates.find((candidate) => existsSync(candidate)) || null;
 }
 
 function normalizeUrl(value, baseUrl) {
   if (!value || typeof value !== "string") return null;
 
-  const raw = value
+  const cleaned = value
     .trim()
     .replaceAll("\\u002F", "/")
     .replaceAll("\\/", "/")
     .replaceAll("&amp;", "&");
 
-  if (!raw || raw.startsWith("data:") || raw.startsWith("blob:")) return null;
+  if (!cleaned || cleaned.startsWith("data:") || cleaned.startsWith("blob:")) return null;
 
   try {
-    return new URL(raw, baseUrl).href;
+    return new URL(cleaned, baseUrl).href;
   } catch {
     return null;
   }
 }
 
-function isProductImageUrl(value) {
+function isProductImage(value) {
   try {
     const url = new URL(value);
-    const host = url.hostname.toLowerCase();
-    const pathname = url.pathname.toLowerCase();
-
-    return (
-      (host === "img.kwcdn.com" || host.endsWith(".kwcdn.com")) &&
-      pathname.includes("/product/")
-    );
+    return url.hostname.endsWith("kwcdn.com") && url.pathname.includes("/product/");
   } catch {
     return false;
   }
 }
 
-function isLikelyVideoUrl(value) {
+function isVideo(value) {
   try {
     const url = new URL(value);
-    const pathname = url.pathname.toLowerCase();
-
-    return (
-      /\.(mp4|webm|m3u8)$/.test(pathname) ||
-      pathname.includes("/video/")
-    );
+    return /\.(mp4|webm|m3u8)$/i.test(url.pathname) || url.pathname.includes("/video/");
   } catch {
     return false;
   }
 }
 
-function canonicalMediaKey(value) {
+function canonical(value) {
   try {
     const url = new URL(value);
     return url.origin + url.pathname;
@@ -71,12 +72,19 @@ function canonicalMediaKey(value) {
   }
 }
 
-function extensionFromType(type, mediaUrl) {
-  const cleanType = (type || "").split(";")[0].trim().toLowerCase();
+function extractUrls(html) {
+  return html
+    .replaceAll("\\u002F", "/")
+    .replaceAll("\\/", "/")
+    .replaceAll("&amp;", "&")
+    .match(/https?:\/\/[^"'<>\s]+/g) || [];
+}
 
-  const byType = {
+function extensionFor(type, mediaUrl, kind) {
+  const clean = (type || "").split(";")[0].toLowerCase();
+
+  const known = {
     "image/jpeg": ".jpg",
-    "image/jpg": ".jpg",
     "image/png": ".png",
     "image/webp": ".webp",
     "image/avif": ".avif",
@@ -87,54 +95,54 @@ function extensionFromType(type, mediaUrl) {
     "application/x-mpegurl": ".m3u8"
   };
 
-  if (byType[cleanType]) return byType[cleanType];
+  if (known[clean]) return known[clean];
 
   try {
-    const ext = path.extname(new URL(mediaUrl).pathname).toLowerCase();
+    const ext = path.extname(new URL(mediaUrl).pathname);
     if (ext && ext.length <= 6) return ext;
   } catch {}
 
-  return "";
+  return kind === "image" ? ".jpg" : ".mp4";
 }
 
-function extractUrlsFromHtml(html) {
-  const normalized = html
-    .replaceAll("\\u002F", "/")
-    .replaceAll("\\/", "/")
-    .replaceAll("&amp;", "&");
+async function saveMedia(mediaUrl, folder, index, referer, kind) {
+  try {
+    const response = await fetch(mediaUrl, {
+      headers: {
+        Referer: referer,
+        "User-Agent": "Mozilla/5.0"
+      }
+    });
 
-  return normalized.match(/https?:\/\/[^"'<>\s]+/g) || [];
-}
+    if (!response.ok) return null;
 
-async function waitForTemuLogin(page, productUrl) {
-  if (!/temu\.com\/login\.html/i.test(page.url())) return;
+    const type = response.headers.get("content-type") || "";
 
-  console.log("");
-  console.log("Temu requires login.");
-  console.log("A Chrome window is open.");
-  console.log("Log into Temu ONCE in that window.");
-  console.log("BrewCart will continue automatically after login.");
-  console.log("");
+    if (kind === "image" && !type.startsWith("image/")) return null;
 
-  const deadline = Date.now() + 5 * 60 * 1000;
+    if (
+      kind === "video" &&
+      !type.startsWith("video/") &&
+      !type.includes("mpegurl")
+    ) return null;
 
-  while (Date.now() < deadline) {
-    await page.waitForTimeout(1500);
+    const filename =
+      String(index).padStart(3, "0") +
+      extensionFor(type, mediaUrl, kind);
 
-    if (!/temu\.com\/login\.html/i.test(page.url())) {
-      await page.goto(productUrl, {
-        waitUntil: "domcontentloaded",
-        timeout: 60000
-      });
-      return;
-    }
+    await fs.writeFile(
+      path.join(folder, filename),
+      Buffer.from(await response.arrayBuffer())
+    );
+
+    return { filename, sourceUrl: mediaUrl, contentType: type };
+  } catch {
+    return null;
   }
-
-  throw new Error("Temu login was not completed within 5 minutes.");
 }
 
-async function collectMedia(page) {
-  const dom = await page.evaluate(() => {
+async function collectPageMedia(driver) {
+  return await driver.executeScript(function () {
     const images = new Set();
     const videos = new Set();
 
@@ -150,8 +158,8 @@ async function collectMedia(page) {
 
       const srcset = img.getAttribute("srcset");
       if (srcset) {
-        for (const entry of srcset.split(",")) {
-          add(images, entry.trim().split(/\s+/)[0]);
+        for (const part of srcset.split(",")) {
+          add(images, part.trim().split(/\s+/)[0]);
         }
       }
     }
@@ -167,66 +175,16 @@ async function collectMedia(page) {
 
     return {
       title: document.title,
+      pageUrl: location.href,
       images: [...images],
       videos: [...videos],
       resources: performance.getEntriesByType("resource").map((entry) => entry.name)
     };
   });
-
-  const html = await page.content();
-
-  return {
-    ...dom,
-    htmlUrls: extractUrlsFromHtml(html)
-  };
 }
 
-async function downloadMedia(request, mediaUrl, folder, index, referer, kind) {
-  try {
-    const response = await request.get(mediaUrl, {
-      headers: {
-        referer,
-        "user-agent":
-          "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 Chrome/131 Safari/537.36"
-      },
-      timeout: 30000
-    });
-
-    if (!response.ok()) return null;
-
-    const contentType = response.headers()["content-type"] || "";
-    const ext = extensionFromType(contentType, mediaUrl);
-
-    if (kind === "image" && !contentType.startsWith("image/")) return null;
-
-    if (
-      kind === "video" &&
-      !contentType.startsWith("video/") &&
-      !contentType.includes("mpegurl") &&
-      ext !== ".m3u8"
-    ) {
-      return null;
-    }
-
-    const filename =
-      String(index).padStart(3, "0") +
-      (ext || (kind === "image" ? ".jpg" : ".mp4"));
-
-    await fs.writeFile(path.join(folder, filename), await response.body());
-
-    return {
-      filename,
-      sourceUrl: mediaUrl,
-      contentType
-    };
-  } catch {
-    return null;
-  }
-}
-
-async function importProduct(context, productUrl) {
+async function importProduct(driver, productUrl) {
   const productId = productIdFromUrl(productUrl);
-
   const root = path.join(process.cwd(), "data", "imports", productId);
   const imageDir = path.join(root, "images");
   const videoDir = path.join(root, "videos");
@@ -235,121 +193,69 @@ async function importProduct(context, productUrl) {
   await fs.mkdir(imageDir, { recursive: true });
   await fs.mkdir(videoDir, { recursive: true });
 
-  const page = await context.newPage();
-
-  const networkImages = new Set();
-  const networkVideos = new Set();
-
-  page.on("response", async (response) => {
-    const mediaUrl = response.url();
-    const contentType = (await response.headerValue("content-type")) || "";
-
-    if (contentType.startsWith("image/") && isProductImageUrl(mediaUrl)) {
-      networkImages.add(mediaUrl);
-    }
-
-    if (
-      contentType.startsWith("video/") ||
-      contentType.includes("mpegurl")
-    ) {
-      networkVideos.add(mediaUrl);
-    }
-  });
-
   console.log("");
   console.log("Loading product " + productId + "...");
 
-  await page.goto(productUrl, {
-    waitUntil: "domcontentloaded",
-    timeout: 60000
-  });
+  await driver.get(productUrl);
+  await driver.sleep(7000);
 
-  await waitForTemuLogin(page, productUrl);
+  const currentUrl = await driver.getCurrentUrl();
 
-  await page.waitForTimeout(7000);
+  if (/temu\.com\/login\.html/i.test(currentUrl)) {
+    throw new Error(
+      "Temu is not logged in in BrewCart's Firefox profile. Run LOGIN-TEMU-FIRST.bat, log in, CLOSE Firefox completely, then retry."
+    );
+  }
 
   for (let i = 0; i < 12; i += 1) {
-    await page.mouse.wheel(0, 600);
-    await page.waitForTimeout(400);
+    await driver.executeScript("window.scrollBy(0,650)");
+    await driver.sleep(350);
   }
 
-  await page.mouse.wheel(0, -10000);
-  await page.waitForTimeout(1200);
+  await driver.executeScript("window.scrollTo(0,0)");
+  await driver.sleep(1000);
 
-  if (/temu\.com\/login\.html/i.test(page.url())) {
-    throw new Error("Temu redirected back to login. Login was not retained.");
-  }
-
-  const collected = await collectMedia(page);
-
-  const imageCandidates = [
-    ...collected.images,
-    ...collected.resources,
-    ...collected.htmlUrls,
-    ...networkImages
-  ]
-    .map((url) => normalizeUrl(url, page.url()))
-    .filter(Boolean)
-    .filter(isProductImageUrl);
+  const dom = await collectPageMedia(driver);
+  const html = await driver.getPageSource();
 
   const imageMap = new Map();
 
-  for (const mediaUrl of imageCandidates) {
-    const key = canonicalMediaKey(mediaUrl);
-    if (!imageMap.has(key)) imageMap.set(key, mediaUrl);
+  for (const raw of [...dom.images, ...dom.resources, ...extractUrls(html)]) {
+    const normalized = normalizeUrl(raw, dom.pageUrl);
+    if (!normalized || !isProductImage(normalized)) continue;
+    if (!imageMap.has(canonical(normalized))) {
+      imageMap.set(canonical(normalized), normalized);
+    }
   }
-
-  const videoCandidates = [
-    ...collected.videos,
-    ...collected.resources,
-    ...collected.htmlUrls,
-    ...networkVideos
-  ]
-    .map((url) => normalizeUrl(url, page.url()))
-    .filter(Boolean)
-    .filter(isLikelyVideoUrl);
 
   const videoMap = new Map();
 
-  for (const mediaUrl of videoCandidates) {
-    const key = canonicalMediaKey(mediaUrl);
-    if (!videoMap.has(key)) videoMap.set(key, mediaUrl);
+  for (const raw of [...dom.videos, ...dom.resources, ...extractUrls(html)]) {
+    const normalized = normalizeUrl(raw, dom.pageUrl);
+    if (!normalized || !isVideo(normalized)) continue;
+    if (!videoMap.has(canonical(normalized))) {
+      videoMap.set(canonical(normalized), normalized);
+    }
   }
 
-  const downloadedImages = [];
+  const images = [];
   let imageIndex = 1;
 
   for (const mediaUrl of imageMap.values()) {
-    const saved = await downloadMedia(
-      context.request,
-      mediaUrl,
-      imageDir,
-      imageIndex,
-      page.url(),
-      "image"
-    );
-
+    const saved = await saveMedia(mediaUrl, imageDir, imageIndex, dom.pageUrl, "image");
     if (saved) {
-      downloadedImages.push(saved);
+      images.push(saved);
       imageIndex += 1;
     }
   }
 
-  const downloadedVideos = [];
+  const videos = [];
   let videoIndex = 1;
 
   for (const mediaUrl of videoMap.values()) {
-    const saved = await downloadMedia(
-      context.request,
-      mediaUrl,
-      videoDir,
-      videoIndex,
-      page.url(),
-      "video"
-    );
-
+    const saved = await saveMedia(mediaUrl, videoDir, videoIndex, dom.pageUrl, "video");
     if (saved) {
-      downloadedVideos.push(saved);
+      videos.push(saved);
       videoIndex += 1;
     }
   }
@@ -359,12 +265,12 @@ async function importProduct(context, productUrl) {
     source: "Temu",
     supplierProductId: productId,
     supplierUrl: productUrl,
-    finalPageUrl: page.url(),
-    pageTitle: collected.title,
-    imageCount: downloadedImages.length,
-    videoCount: downloadedVideos.length,
-    images: downloadedImages,
-    videos: downloadedVideos
+    finalPageUrl: dom.pageUrl,
+    pageTitle: dom.title,
+    imageCount: images.length,
+    videoCount: videos.length,
+    images,
+    videos
   };
 
   await fs.writeFile(
@@ -373,37 +279,39 @@ async function importProduct(context, productUrl) {
     "utf8"
   );
 
-  console.log(
-    "Saved " +
-      downloadedImages.length +
-      " product images and " +
-      downloadedVideos.length +
-      " videos."
-  );
-
+  console.log("Saved " + images.length + " product images and " + videos.length + " videos.");
   console.log("Folder: " + root);
-
-  await page.close();
 }
 
-const userDataDir = path.join(process.cwd(), ".temu-firefox-profile");
+const firefoxBinary = getFirefoxBinary();
 
-let context;
+if (!firefoxBinary) {
+  console.error("Installed Firefox was not found.");
+  process.exit(1);
+}
+
+const profileDir = path.join(process.cwd(), ".temu-firefox-profile");
+
+if (!existsSync(profileDir)) {
+  console.error("Temu Firefox profile was not found.");
+  console.error("Run LOGIN-TEMU-FIRST.bat first.");
+  process.exit(1);
+}
+
+const options = new firefox.Options();
+options.setBinary(firefoxBinary);
+options.setProfile(profileDir);
+
+let driver;
 
 try {
-  context = await firefox.launchPersistentContext(userDataDir, {
-    headless: false,
-    args: ["--allow-downgrade"],
-    env: {
-      ...process.env,
-      MOZ_ALLOW_DOWNGRADE: "1"
-    },
-    viewport: { width: 1365, height: 900 },
-    locale: "en-US"
-  });
+  driver = await new Builder()
+    .forBrowser("firefox")
+    .setFirefoxOptions(options)
+    .build();
 
-  for (const productUrl of args) {
-    await importProduct(context, productUrl);
+  for (const productUrl of urls) {
+    await importProduct(driver, productUrl);
   }
 } catch (error) {
   console.error("");
@@ -411,5 +319,7 @@ try {
   console.error(error?.message || error);
   process.exitCode = 1;
 } finally {
-  if (context) await context.close();
+  if (driver) {
+    await driver.quit();
+  }
 }
