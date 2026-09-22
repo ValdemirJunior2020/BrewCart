@@ -6,7 +6,8 @@
     "dev": "next dev",
     "build": "next build",
     "start": "next start",
-    "import:temu": "node scripts/import-temu.mjs"
+    "import:temu": "node scripts/import-temu.mjs",
+    "login:temu": "node scripts/login-temu.mjs"
   },
   "dependencies": {
     "next": "15.5.2",
@@ -20,5 +21,7 @@
     "@types/react-dom": "^19.1.0",
     "typescript": "^5.8.3"
   },
-  "engines": { "node": ">=20" }
+  "engines": {
+    "node": ">=20"
+  }
 }
