@@ -12,7 +12,7 @@ if errorlevel 1 (
 
 echo.
 echo ============================================================
-echo   BREWCART - IMPORTING YOUR 3 TEMU PRODUCTS
+echo   BREWCART - IMPORTING YOUR 3 TEMU PRODUCTS WITH FIREFOX
 echo ============================================================
 echo.
 echo Syncing BrewCart packages...
@@ -20,6 +20,16 @@ call npm install
 if errorlevel 1 (
   echo.
   echo npm install failed.
+  pause
+  exit /b 1
+)
+
+echo.
+echo Making sure Playwright Firefox is installed...
+call npx playwright install firefox
+if errorlevel 1 (
+  echo.
+  echo Firefox engine installation failed.
   pause
   exit /b 1
 )
