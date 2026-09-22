@@ -391,9 +391,11 @@ const userDataDir = path.join(process.cwd(), ".temu-firefox-profile");
 let context;
 
 try {
-  context = await firefox.launchPersistentContext(userDataDir, {\n    headless: false,
+  context = await firefox.launchPersistentContext(userDataDir, {
+    headless: false,
     viewport: { width: 1365, height: 900 },
-    locale: "en-US"\n  });
+    locale: "en-US"
+  });
 
   for (const productUrl of args) {
     await importProduct(context, productUrl);
