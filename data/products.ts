@@ -1,13 +1,63 @@
 export type Product = {
-  id: number; name: string; category: string; price: number; compareAt: number;
-  rating: number; reviews: number; badge?: string; shipping?: string; image: string;
+  id: number;
+  name: string;
+  category: string;
+  price: number | null;
+  compareAt: number | null;
+  rating: number | null;
+  reviews: number | null;
+  badge?: string;
+  shipping?: string;
+  image: string;
+  source: "Temu" | "Demo";
+  supplierProductId?: string;
+  supplierUrl?: string;
 };
 
 export const products: Product[] = [
-  {id:1,name:"Compact Espresso Maker 20 Bar",category:"Espresso",price:89.99,compareAt:129.99,rating:4.8,reviews:1246,badge:"Hot Deal",shipping:"Free shipping",image:"https://images.unsplash.com/photo-1510591509098-f4fdc6d0ff04?auto=format&fit=crop&w=900&q=80"},
-  {id:2,name:"Electric Burr Coffee Grinder",category:"Grinders",price:39.99,compareAt:59.99,rating:4.7,reviews:892,badge:"Best Seller",shipping:"Free shipping",image:"https://images.unsplash.com/photo-1517080310959-bc2a2e5f3f49?auto=format&fit=crop&w=900&q=80"},
-  {id:3,name:"Handheld Milk Frother Pro",category:"Frothers",price:14.99,compareAt:24.99,rating:4.6,reviews:532,badge:"Under $20",shipping:"Free shipping",image:"https://images.unsplash.com/photo-1570968915860-54d5c301fa9f?auto=format&fit=crop&w=900&q=80"},
-  {id:4,name:"Digital Coffee Scale with Timer",category:"Accessories",price:19.95,compareAt:29.95,rating:4.7,reviews:321,badge:"Limited Deal",shipping:"Free shipping",image:"https://images.unsplash.com/photo-1521302080334-4bebac2763a6?auto=format&fit=crop&w=900&q=80"},
-  {id:5,name:"Double Wall Glass Mug Set",category:"Mugs",price:21.99,compareAt:34.99,rating:4.9,reviews:711,badge:"Customer Favorite",shipping:"Free shipping",image:"https://images.unsplash.com/photo-1511081692775-05d0f180a065?auto=format&fit=crop&w=900&q=80"},
-  {id:6,name:"Airtight Coffee Bean Canister",category:"Storage",price:24.99,compareAt:36.99,rating:4.8,reviews:408,badge:"New",shipping:"Free shipping",image:"https://images.unsplash.com/photo-1495474472287-4d71bcdd2085?auto=format&fit=crop&w=900&q=80"}
+  {
+    id: 1,
+    name: "Professional Espresso Machine with Grinder, Milk Frother & Steam Wand",
+    category: "Espresso Machines",
+    price: null,
+    compareAt: null,
+    rating: null,
+    reviews: null,
+    badge: "New supplier product",
+    shipping: "Shipping set in admin",
+    image: "https://img.kwcdn.com/product/open/86a37ac4e1294bf586fcaa0abe64cd75-goods.jpeg",
+    source: "Temu",
+    supplierProductId: "605596761851539",
+    supplierUrl: "https://www.temu.com/espresso-machine-with-grinder-professional-coffee-maker-for-latte-cappuccino-with-milk-frother-steam-wand-removable-water-tank-for-home-g-605596761851539.html"
+  },
+  {
+    id: 2,
+    name: "15-Bar Espresso Machine with Built-In Grinder, Milk Frother & 70oz Water Tank",
+    category: "Espresso Machines",
+    price: null,
+    compareAt: null,
+    rating: null,
+    reviews: null,
+    badge: "New supplier product",
+    shipping: "Shipping set in admin",
+    image: "https://img.kwcdn.com/product/fancy/aa4936bb-0287-47f7-a41d-c419337ec4d6.jpg",
+    source: "Temu",
+    supplierProductId: "601099704667803",
+    supplierUrl: "https://www.temu.com/-espresso-machine-15-bar-coffee-maker-with-milk-frother-steam-wand-built-in-bean-grinder-combo-cappuccino-machine-with-70oz-removable-water-tank-abs-high-strength-plastic-shell-g-601099704667803.html"
+  },
+  {
+    id: 3,
+    name: "1350W 20-Bar Espresso Maker with Instant Heating & Milk Frother",
+    category: "Espresso Machines",
+    price: null,
+    compareAt: null,
+    rating: null,
+    reviews: null,
+    badge: "New supplier product",
+    shipping: "Shipping set in admin",
+    image: "https://img.kwcdn.com/product/fancy/749d8f9c-5f78-499d-aa92-ac80793ae9a6.jpg",
+    source: "Temu",
+    supplierProductId: "606623779151957",
+    supplierUrl: "https://www.temu.com/1350w-20-machine-instant-heating-system-espresso-maker-with-milk-frother-fast-brew-italian--machine-for-latte-cappuccino-1-6l-removable-water-tank--g-606623779151957.html"
+  }
 ];
