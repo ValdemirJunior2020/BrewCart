@@ -10,16 +10,6 @@ if (!args.length) {
   process.exit(1);
 }
 
-function isTemuUrl(value) {
-  try {
-    const url = new URL(value);
-    return url.protocol === "https:" &&
-      (url.hostname === "temu.com" || url.hostname.endsWith(".temu.com"));
-  } catch {
-    return false;
-  }
-}
-
 function productIdFromUrl(value) {
   const match = value.match(/-g-(\d+)\.html/i);
   return match?.[1] || ("temu-" + Date.now());
@@ -28,7 +18,7 @@ function productIdFromUrl(value) {
 function normalizeUrl(value, baseUrl) {
   if (!value || typeof value !== "string") return null;
 
-  let raw = value
+  const raw = value
     .trim()
     .replaceAll("\\u002F", "/")
     .replaceAll("\\/", "/")
@@ -40,15 +30,6 @@ function normalizeUrl(value, baseUrl) {
     return new URL(raw, baseUrl).href;
   } catch {
     return null;
-  }
-}
-
-function canonicalMediaKey(value) {
-  try {
-    const url = new URL(value);
-    return url.origin + url.pathname;
-  } catch {
-    return value;
   }
 }
 
@@ -71,11 +52,22 @@ function isLikelyVideoUrl(value) {
   try {
     const url = new URL(value);
     const pathname = url.pathname.toLowerCase();
-    return /\.(mp4|webm|m3u8)$/.test(pathname) ||
-      pathname.includes("/video/") ||
-      pathname.includes("video");
+
+    return (
+      /\.(mp4|webm|m3u8)$/.test(pathname) ||
+      pathname.includes("/video/")
+    );
   } catch {
     return false;
+  }
+}
+
+function canonicalMediaKey(value) {
+  try {
+    const url = new URL(value);
+    return url.origin + url.pathname;
+  } catch {
+    return value;
   }
 }
 
@@ -114,8 +106,35 @@ function extractUrlsFromHtml(html) {
   return normalized.match(/https?:\/\/[^"'<>\s]+/g) || [];
 }
 
-async function collectDomMedia(page) {
-  return await page.evaluate(() => {
+async function waitForTemuLogin(page, productUrl) {
+  if (!/temu\.com\/login\.html/i.test(page.url())) return;
+
+  console.log("");
+  console.log("Temu requires login.");
+  console.log("A Chrome window is open.");
+  console.log("Log into Temu ONCE in that window.");
+  console.log("BrewCart will continue automatically after login.");
+  console.log("");
+
+  const deadline = Date.now() + 5 * 60 * 1000;
+
+  while (Date.now() < deadline) {
+    await page.waitForTimeout(1500);
+
+    if (!/temu\.com\/login\.html/i.test(page.url())) {
+      await page.goto(productUrl, {
+        waitUntil: "domcontentloaded",
+        timeout: 60000
+      });
+      return;
+    }
+  }
+
+  throw new Error("Temu login was not completed within 5 minutes.");
+}
+
+async function collectMedia(page) {
+  const dom = await page.evaluate(() => {
     const images = new Set();
     const videos = new Set();
 
@@ -150,14 +169,19 @@ async function collectDomMedia(page) {
       title: document.title,
       images: [...images],
       videos: [...videos],
-      performanceEntries: performance
-        .getEntriesByType("resource")
-        .map((entry) => entry.name)
+      resources: performance.getEntriesByType("resource").map((entry) => entry.name)
     };
   });
+
+  const html = await page.content();
+
+  return {
+    ...dom,
+    htmlUrls: extractUrlsFromHtml(html)
+  };
 }
 
-async function downloadMedia(request, mediaUrl, folder, index, referer, wantedType) {
+async function downloadMedia(request, mediaUrl, folder, index, referer, kind) {
   try {
     const response = await request.get(mediaUrl, {
       headers: {
@@ -173,18 +197,20 @@ async function downloadMedia(request, mediaUrl, folder, index, referer, wantedTy
     const contentType = response.headers()["content-type"] || "";
     const ext = extensionFromType(contentType, mediaUrl);
 
-    const isImage = contentType.startsWith("image/");
-    const isVideo =
-      contentType.startsWith("video/") ||
-      ext === ".m3u8" ||
-      contentType.includes("mpegurl");
+    if (kind === "image" && !contentType.startsWith("image/")) return null;
 
-    if (wantedType === "image" && !isImage) return null;
-    if (wantedType === "video" && !isVideo) return null;
+    if (
+      kind === "video" &&
+      !contentType.startsWith("video/") &&
+      !contentType.includes("mpegurl") &&
+      ext !== ".m3u8"
+    ) {
+      return null;
+    }
 
     const filename =
       String(index).padStart(3, "0") +
-      (ext || (wantedType === "image" ? ".jpg" : ".mp4"));
+      (ext || (kind === "image" ? ".jpg" : ".mp4"));
 
     await fs.writeFile(path.join(folder, filename), await response.body());
 
@@ -198,115 +224,102 @@ async function downloadMedia(request, mediaUrl, folder, index, referer, wantedTy
   }
 }
 
-async function importProduct(browser, productUrl) {
-  if (!isTemuUrl(productUrl)) {
-    console.warn("Skipping non-Temu URL:", productUrl);
-    return;
-  }
-
+async function importProduct(context, productUrl) {
   const productId = productIdFromUrl(productUrl);
+
   const root = path.join(process.cwd(), "data", "imports", productId);
   const imageDir = path.join(root, "images");
   const videoDir = path.join(root, "videos");
 
-  // Remove the previous bad import so old logos/payment icons are not left behind.
   await fs.rm(root, { recursive: true, force: true });
   await fs.mkdir(imageDir, { recursive: true });
   await fs.mkdir(videoDir, { recursive: true });
 
-  const context = await browser.newContext({
-    viewport: { width: 1365, height: 900 },
-    locale: "en-US"
-  });
-
   const page = await context.newPage();
 
-  const responseProductImages = new Set();
-  const responseVideos = new Set();
+  const networkImages = new Set();
+  const networkVideos = new Set();
 
   page.on("response", async (response) => {
     const mediaUrl = response.url();
     const contentType = (await response.headerValue("content-type")) || "";
 
-    if (
-      contentType.startsWith("image/") &&
-      isProductImageUrl(mediaUrl)
-    ) {
-      responseProductImages.add(mediaUrl);
+    if (contentType.startsWith("image/") && isProductImageUrl(mediaUrl)) {
+      networkImages.add(mediaUrl);
     }
 
     if (
       contentType.startsWith("video/") ||
       contentType.includes("mpegurl")
     ) {
-      responseVideos.add(mediaUrl);
+      networkVideos.add(mediaUrl);
     }
   });
 
-  console.log("\nLoading product " + productId + "...");
+  console.log("");
+  console.log("Loading product " + productId + "...");
 
   await page.goto(productUrl, {
     waitUntil: "domcontentloaded",
     timeout: 60000
   });
 
+  await waitForTemuLogin(page, productUrl);
+
   await page.waitForTimeout(7000);
 
-  // Scroll only to trigger lazy-loaded product media.
-  for (let i = 0; i < 10; i += 1) {
-    await page.mouse.wheel(0, 650);
-    await page.waitForTimeout(450);
+  for (let i = 0; i < 12; i += 1) {
+    await page.mouse.wheel(0, 600);
+    await page.waitForTimeout(400);
   }
 
   await page.mouse.wheel(0, -10000);
   await page.waitForTimeout(1200);
 
-  const dom = await collectDomMedia(page);
-  const html = await page.content();
+  if (/temu\.com\/login\.html/i.test(page.url())) {
+    throw new Error("Temu redirected back to login. Login was not retained.");
+  }
 
-  const allRawCandidates = [
-    ...dom.images,
-    ...dom.performanceEntries,
-    ...extractUrlsFromHtml(html),
-    ...responseProductImages
-  ];
+  const collected = await collectMedia(page);
 
-  const normalizedImageCandidates = allRawCandidates
+  const imageCandidates = [
+    ...collected.images,
+    ...collected.resources,
+    ...collected.htmlUrls,
+    ...networkImages
+  ]
     .map((url) => normalizeUrl(url, page.url()))
     .filter(Boolean)
     .filter(isProductImageUrl);
 
-  // Dedupe resized copies of the same Temu product image by ignoring query strings.
-  const productImageMap = new Map();
-  for (const mediaUrl of normalizedImageCandidates) {
+  const imageMap = new Map();
+
+  for (const mediaUrl of imageCandidates) {
     const key = canonicalMediaKey(mediaUrl);
-    if (!productImageMap.has(key)) productImageMap.set(key, mediaUrl);
+    if (!imageMap.has(key)) imageMap.set(key, mediaUrl);
   }
 
-  const productImageUrls = [...productImageMap.values()];
-
-  const normalizedVideoCandidates = [
-    ...dom.videos,
-    ...dom.performanceEntries,
-    ...responseVideos,
-    ...extractUrlsFromHtml(html)
+  const videoCandidates = [
+    ...collected.videos,
+    ...collected.resources,
+    ...collected.htmlUrls,
+    ...networkVideos
   ]
     .map((url) => normalizeUrl(url, page.url()))
     .filter(Boolean)
     .filter(isLikelyVideoUrl);
 
   const videoMap = new Map();
-  for (const mediaUrl of normalizedVideoCandidates) {
+
+  for (const mediaUrl of videoCandidates) {
     const key = canonicalMediaKey(mediaUrl);
     if (!videoMap.has(key)) videoMap.set(key, mediaUrl);
   }
 
-  const videoUrls = [...videoMap.values()];
-
   const downloadedImages = [];
   let imageIndex = 1;
 
-  for (const mediaUrl of productImageUrls) {
+  for (const mediaUrl of imageMap.values()) {
     const saved = await downloadMedia(
       context.request,
       mediaUrl,
@@ -325,7 +338,7 @@ async function importProduct(browser, productUrl) {
   const downloadedVideos = [];
   let videoIndex = 1;
 
-  for (const mediaUrl of videoUrls) {
+  for (const mediaUrl of videoMap.values()) {
     const saved = await downloadMedia(
       context.request,
       mediaUrl,
@@ -347,9 +360,7 @@ async function importProduct(browser, productUrl) {
     supplierProductId: productId,
     supplierUrl: productUrl,
     finalPageUrl: page.url(),
-    pageTitle: dom.title,
-    imageFilter:
-      "Only kwcdn product assets (/product/) are retained. Logos, payment icons, QR codes and general site graphics are excluded.",
+    pageTitle: collected.title,
     imageCount: downloadedImages.length,
     videoCount: downloadedVideos.length,
     images: downloadedImages,
@@ -365,30 +376,36 @@ async function importProduct(browser, productUrl) {
   console.log(
     "Saved " +
       downloadedImages.length +
-      " PRODUCT images and " +
+      " product images and " +
       downloadedVideos.length +
       " videos."
   );
+
   console.log("Folder: " + root);
 
-  await context.close();
+  await page.close();
 }
 
-let browser;
+const userDataDir = path.join(process.cwd(), ".temu-browser-profile");
+
+let context;
 
 try {
-  browser = await chromium.launch({
+  context = await chromium.launchPersistentContext(userDataDir, {
     channel: "chrome",
-    headless: true
+    headless: false,
+    viewport: { width: 1365, height: 900 },
+    locale: "en-US"
   });
 
   for (const productUrl of args) {
-    await importProduct(browser, productUrl);
+    await importProduct(context, productUrl);
   }
 } catch (error) {
-  console.error("\nTemu import failed.");
+  console.error("");
+  console.error("Temu import failed.");
   console.error(error?.message || error);
   process.exitCode = 1;
 } finally {
-  if (browser) await browser.close();
+  if (context) await context.close();
 }
