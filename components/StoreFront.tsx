@@ -3,7 +3,7 @@
 import { useEffect, useMemo, useState } from "react";
 import { products, Product } from "@/data/products";
 
-type CartItem = Product & { qty: number };
+type CartItem = Product & { qty: number; price: number };
 
 const money = (value: number) =>
   new Intl.NumberFormat("en-US", { style: "currency", currency: "USD" }).format(value);
@@ -36,11 +36,12 @@ export default function StoreFront() {
   const subtotal = cart.reduce((sum, item) => sum + item.price * item.qty, 0);
 
   const add = (product: Product) => {
+    if (product.price === null) return;
     setCart((current) => {
       const exists = current.find((item) => item.id === product.id);
       return exists
         ? current.map((item) => item.id === product.id ? { ...item, qty: item.qty + 1 } : item)
-        : [...current, { ...product, qty: 1 }];
+        : [...current, { ...product, price: product.price, qty: 1 }];
     });
     setCartOpen(true);
   };
@@ -67,37 +68,42 @@ export default function StoreFront() {
         <label className="search">
           <span>⌕</span>
           <input value={query} onChange={(e) => setQuery(e.target.value)}
-            placeholder="Search coffee gear, mugs, grinders..." aria-label="Search BrewCart" />
+            placeholder="Search espresso machines..." aria-label="Search BrewCart" />
         </label>
       </header>
 
       <section className="hero" id="home">
         <div>
           <span className="eyebrow">BETTER DEALS. BETTER MORNINGS.</span>
-          <h1>Upgrade your coffee setup without the premium markup.</h1>
-          <p>Fresh finds, useful gear and deal-first shopping made for your phone.</p>
-          <a href="#deals" className="primary">Shop today&apos;s deals</a>
+          <h1>Espresso gear picked for better mornings.</h1>
+          <p>Real supplier products, mobile-first shopping, and prices you control.</p>
+          <a href="#deals" className="primary">Shop espresso machines</a>
         </div>
         <div className="heroCard" aria-hidden="true">
-          <span>☕</span><strong>Daily Brew Drop</strong><small>New deal every morning</small>
+          <span>☕</span><strong>BrewCart Picks</strong><small>Supplier products ready for your pricing</small>
         </div>
       </section>
 
       <section className="categoryStrip" aria-label="Categories">
-        {["Espresso","Grinders","Frothers","Mugs","Accessories","Storage"].map((item) => (
+        {["Espresso Machines"].map((item) => (
           <button key={item} onClick={() => setQuery(item)}>{item}</button>
         ))}
       </section>
 
       <section id="deals" className="section">
         <div className="sectionHeading">
-          <div><span className="eyebrow">TRENDING NOW</span><h2>Deals worth waking up for</h2></div>
+          <div><span className="eyebrow">BREWCART PICKS</span><h2>Espresso machines</h2></div>
           <span className="results">{filtered.length} items</span>
         </div>
 
         <div className="productGrid">
           {filtered.map((product) => {
-            const discount = Math.round((1 - product.price / product.compareAt) * 100);
+            const hasPrice = product.price !== null;
+            const hasCompare = product.compareAt !== null && product.price !== null;
+            const discount = hasCompare
+              ? Math.round((1 - (product.price as number) / (product.compareAt as number)) * 100)
+              : null;
+
             return (
               <article className="productCard" key={product.id}>
                 <div className="imageWrap">
@@ -108,14 +114,29 @@ export default function StoreFront() {
                 <div className="productBody">
                   <small>{product.category}</small>
                   <h3>{product.name}</h3>
-                  <div className="rating">★ {product.rating} <span>({product.reviews})</span></div>
+
+                  {product.rating !== null && product.reviews !== null ? (
+                    <div className="rating">★ {product.rating} <span>({product.reviews})</span></div>
+                  ) : (
+                    <div className="rating"><span>Supplier product</span></div>
+                  )}
+
                   <div className="priceRow">
-                    <strong>{money(product.price)}</strong>
-                    <del>{money(product.compareAt)}</del>
-                    <span className="discount">-{discount}%</span>
+                    {hasPrice ? (
+                      <>
+                        <strong>{money(product.price as number)}</strong>
+                        {product.compareAt !== null && <del>{money(product.compareAt)}</del>}
+                        {discount !== null && <span className="discount">-{discount}%</span>}
+                      </>
+                    ) : (
+                      <strong>Price pending</strong>
+                    )}
                   </div>
+
                   <div className="shipping">{product.shipping}</div>
-                  <button className="addButton" onClick={() => add(product)}>Add to cart</button>
+                  <button className="addButton" onClick={() => add(product)} disabled={!hasPrice}>
+                    {hasPrice ? "Add to cart" : "Set selling price first"}
+                  </button>
                 </div>
               </article>
             );
@@ -126,9 +147,9 @@ export default function StoreFront() {
       </section>
 
       <section className="valueBand">
-        <div><strong>Fast discovery</strong><span>Search and filters built for mobile.</span></div>
-        <div><strong>Deal-first pricing</strong><span>Discounts stay easy to understand.</span></div>
-        <div><strong>Simple checkout</strong><span>Guest checkout + PayPal is next.</span></div>
+        <div><strong>Real supplier products</strong><span>These three items use the supplier links you selected.</span></div>
+        <div><strong>Your pricing</strong><span>Customer pricing is separate from supplier cost.</span></div>
+        <div><strong>Supplier stays private</strong><span>The supplier URL is stored in product data, not shown to shoppers.</span></div>
       </section>
 
       <div className={"overlay " + (cartOpen ? "show" : "")} onClick={() => setCartOpen(false)} />
