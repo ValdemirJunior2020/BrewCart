@@ -11,7 +11,7 @@ const money = (value: number) =>
 export default function StoreFront() {
   const [query, setQuery] = useState("");
   const [cart, setCart] = useState<CartItem[]>([]);
-  const [cartOpen, setCartOpen] = useState(false);
+  const [cartOpen, setCartOpen] = useState(false);\n  const [zoomImage, setZoomImage] = useState<{ src: string; alt: string } | null>(null);
 
   useEffect(() => {
     try {
@@ -107,7 +107,7 @@ export default function StoreFront() {
             return (
               <article className="productCard" key={product.id}>
                 <div className="imageWrap">
-                  <img src={product.image} alt={product.name} loading="lazy" />
+                  <button className="productImageButton" onClick={() => setZoomImage({ src: product.image, alt: product.name })} aria-label={"Enlarge " + product.name}>\n                    <img src={product.image} alt={product.name} loading="lazy" />\n                  </button>
                   <span className="dealBadge">{product.badge}</span>
                   <button className="heart" aria-label={"Save " + product.name}>♡</button>
                 </div>
@@ -152,7 +152,7 @@ export default function StoreFront() {
         <div><strong>Supplier stays private</strong><span>The supplier URL is stored in product data, not shown to shoppers.</span></div>
       </section>
 
-      <div className={"overlay " + (cartOpen ? "show" : "")} onClick={() => setCartOpen(false)} />
+      {zoomImage && (\n        <div className="imageLightbox" role="dialog" aria-modal="true" aria-label="Product image preview" onClick={() => setZoomImage(null)}>\n          <button className="lightboxClose" onClick={() => setZoomImage(null)} aria-label="Close image">✕</button>\n          <img src={zoomImage.src} alt={zoomImage.alt} onClick={(e) => e.stopPropagation()} />\n        </div>\n      )}\n\n      <div className={"overlay " + (cartOpen ? "show" : "")} onClick={() => setCartOpen(false)} />
       <aside className={"cartDrawer " + (cartOpen ? "open" : "")} aria-hidden={!cartOpen}>
         <div className="drawerHead">
           <div><small>YOUR CART</small><h2>{count} item{count === 1 ? "" : "s"}</h2></div>
