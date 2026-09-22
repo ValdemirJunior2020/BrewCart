@@ -393,6 +393,11 @@ let context;
 try {
   context = await firefox.launchPersistentContext(userDataDir, {
     headless: false,
+    args: ["--allow-downgrade"],
+    env: {
+      ...process.env,
+      MOZ_ALLOW_DOWNGRADE: "1"
+    },
     viewport: { width: 1365, height: 900 },
     locale: "en-US"
   });
