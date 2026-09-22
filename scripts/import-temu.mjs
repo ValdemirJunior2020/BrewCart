@@ -1,1 +1,282 @@
-import { chromium } from "playwright-core";\nimport fs from "node:fs/promises";\nimport path from "node:path";\nimport process from "node:process";\n\nconst args = process.argv.slice(2).filter(Boolean);\nif (!args.length) {\n  console.error("Usage: npm run import:temu -- <temu-product-url> [more urls...]");\n  process.exit(1);\n}\n\nfunction isTemuUrl(value) {\n  try {\n    const url = new URL(value);\n    return url.protocol === "https:" && (url.hostname === "temu.com" || url.hostname.endsWith(".temu.com"));\n  } catch { return false; }\n}\n\nfunction productIdFromUrl(value) {\n  const match = value.match(/-g-(\d+)\.html/i);\n  return match?.[1] || ("temu-" + Date.now());\n}\n\nfunction normalizeMediaUrl(value, baseUrl) {\n  if (!value || typeof value !== "string") return null;\n  const raw = value.trim();\n  if (!raw || raw.startsWith("data:") || raw.startsWith("blob:")) return null;\n  try { return new URL(raw, baseUrl).href; } catch { return null; }\n}\n\nfunction extensionFromType(type, mediaUrl) {\n  const cleanType = (type || "").split(";")[0].trim().toLowerCase();\n  const byType = {\n    "image/jpeg": ".jpg", "image/jpg": ".jpg", "image/png": ".png", "image/webp": ".webp",\n    "image/avif": ".avif", "image/gif": ".gif", "video/mp4": ".mp4", "video/webm": ".webm",\n    "application/vnd.apple.mpegurl": ".m3u8"\n  };\n  if (byType[cleanType]) return byType[cleanType];\n  try {\n    const ext = path.extname(new URL(mediaUrl).pathname).toLowerCase();\n    if (ext && ext.length <= 6) return ext;\n  } catch {}\n  return "";\n}\n\nfunction walkJson(value, found) {\n  if (Array.isArray(value)) { for (const item of value) walkJson(item, found); return; }\n  if (!value || typeof value !== "object") return;\n  for (const [key, child] of Object.entries(value)) {\n    if (typeof child === "string" && ["image","images","contenturl","thumbnailurl","video","url"].includes(key.toLowerCase())) found.push(child);\n    walkJson(child, found);\n  }\n}\n\nasync function collectMedia(page) {\n  return await page.evaluate(() => {\n    const images = new Set();\n    const videos = new Set();\n    const posters = new Set();\n    const jsonLdValues = [];\n    const add = (set, value) => { if (typeof value === "string" && value.trim()) set.add(value.trim()); };\n\n    for (const img of document.querySelectorAll("img")) {\n      add(images, img.currentSrc); add(images, img.src);\n      const srcset = img.getAttribute("srcset");\n      if (srcset) for (const entry of srcset.split(",")) add(images, entry.trim().split(/\s+/)[0]);\n    }\n\n    for (const video of document.querySelectorAll("video")) {\n      add(videos, video.currentSrc); add(videos, video.src); add(posters, video.poster);\n      for (const source of video.querySelectorAll("source")) add(videos, source.src);\n    }\n\n    for (const script of document.querySelectorAll('script[type="application/ld+json"]')) {\n      try { jsonLdValues.push(JSON.parse(script.textContent || "")); } catch {}\n    }\n\n    return {\n      title: document.title,\n      images: [...images], videos: [...videos], posters: [...posters], jsonLdValues,\n      performanceEntries: performance.getEntriesByType("resource").map((entry) => entry.name)\n    };\n  });\n}\n\nasync function downloadMedia(request, mediaUrl, folder, index, referer) {\n  try {\n    const response = await request.get(mediaUrl, { headers: { referer, "user-agent": "Mozilla/5.0" }, timeout: 30000 });\n    if (!response.ok()) return null;\n    const type = response.headers()["content-type"] || "";\n    const ext = extensionFromType(type, mediaUrl);\n    const isImage = type.startsWith("image/");\n    const isVideo = type.startsWith("video/") || ext === ".m3u8";\n    if (!isImage && !isVideo) return null;\n    const filename = String(index).padStart(3, "0") + (ext || (isImage ? ".jpg" : ".mp4"));\n    await fs.writeFile(path.join(folder, filename), await response.body());\n    return { filename, sourceUrl: mediaUrl, contentType: type };\n  } catch { return null; }\n}\n\nasync function importProduct(browser, productUrl) {\n  if (!isTemuUrl(productUrl)) { console.warn("Skipping non-Temu URL:", productUrl); return; }\n\n  const productId = productIdFromUrl(productUrl);\n  const root = path.join(process.cwd(), "data", "imports", productId);\n  const imageDir = path.join(root, "images");\n  const videoDir = path.join(root, "videos");\n  await fs.mkdir(imageDir, { recursive: true });\n  await fs.mkdir(videoDir, { recursive: true });\n\n  const context = await browser.newContext({ viewport: { width: 1365, height: 900 }, locale: "en-US" });\n  const page = await context.newPage();\n  console.log("\nLoading " + productUrl);\n  await page.goto(productUrl, { waitUntil: "domcontentloaded", timeout: 60000 });\n  await page.waitForTimeout(5000);\n  for (let i = 0; i < 8; i += 1) { await page.mouse.wheel(0, 700); await page.waitForTimeout(500); }\n\n  const collected = await collectMedia(page);\n  const jsonLdUrls = [];\n  for (const value of collected.jsonLdValues) walkJson(value, jsonLdUrls);\n\n  const performanceImages = collected.performanceEntries.filter((url) => /\.(?:jpe?g|png|webp|avif|gif)(?:\?|$)/i.test(url));\n  const performanceVideos = collected.performanceEntries.filter((url) => /\.(?:mp4|webm|m3u8)(?:\?|$)/i.test(url));\n\n  const imageUrls = [...new Set([...collected.images, ...collected.posters, ...jsonLdUrls, ...performanceImages]\n    .map((url) => normalizeMediaUrl(url, page.url())).filter(Boolean))];\n  const videoUrls = [...new Set([...collected.videos, ...performanceVideos]\n    .map((url) => normalizeMediaUrl(url, page.url())).filter(Boolean))];\n\n  const downloadedImages = [];\n  let imageIndex = 1;\n  for (const mediaUrl of imageUrls) {\n    const saved = await downloadMedia(context.request, mediaUrl, imageDir, imageIndex, page.url());\n    if (saved) { downloadedImages.push(saved); imageIndex += 1; }\n  }\n\n  const downloadedVideos = [];\n  let videoIndex = 1;\n  for (const mediaUrl of videoUrls) {\n    const saved = await downloadMedia(context.request, mediaUrl, videoDir, videoIndex, page.url());\n    if (saved) { downloadedVideos.push(saved); videoIndex += 1; }\n  }\n\n  const manifest = {\n    importedAt: new Date().toISOString(), source: "Temu", supplierProductId: productId,\n    supplierUrl: productUrl, pageTitle: collected.title,\n    imageCount: downloadedImages.length, videoCount: downloadedVideos.length,\n    images: downloadedImages, videos: downloadedVideos\n  };\n  await fs.writeFile(path.join(root, "manifest.json"), JSON.stringify(manifest, null, 2), "utf8");\n  console.log("Saved " + downloadedImages.length + " images and " + downloadedVideos.length + " videos to:");\n  console.log(root);\n  await context.close();\n}\n\nlet browser;\ntry {\n  browser = await chromium.launch({ channel: "chrome", headless: true });\n  for (const productUrl of args) await importProduct(browser, productUrl);\n} catch (error) {\n  console.error("\nTemu import failed.");\n  console.error(error?.message || error);\n  console.error("\nMake sure Google Chrome is installed and the product page opens normally in your country.");\n  process.exitCode = 1;\n} finally {\n  if (browser) await browser.close();\n}\n
+import { chromium } from "playwright-core";
+import fs from "node:fs/promises";
+import path from "node:path";
+import process from "node:process";
+
+const args = process.argv.slice(2).filter(Boolean);
+if (!args.length) {
+  console.error("Usage: npm run import:temu -- <temu-product-url> [more urls...]");
+  process.exit(1);
+}
+
+function isTemuUrl(value) {
+  try {
+    const url = new URL(value);
+    return url.protocol === "https:" && (url.hostname === "temu.com" || url.hostname.endsWith(".temu.com"));
+  } catch {
+    return false;
+  }
+}
+
+function productIdFromUrl(value) {
+  const match = value.match(/-g-(\d+)\.html/i);
+  return match?.[1] || ("temu-" + Date.now());
+}
+
+function normalizeMediaUrl(value, baseUrl) {
+  if (!value || typeof value !== "string") return null;
+  let raw = value.trim();
+  if (!raw || raw.startsWith("data:") || raw.startsWith("blob:")) return null;
+  raw = raw
+    .replaceAll("\\u002F", "/")
+    .replaceAll("\\/", "/")
+    .replaceAll("&amp;", "&");
+  try {
+    return new URL(raw, baseUrl).href;
+  } catch {
+    return null;
+  }
+}
+
+function extensionFromType(type, mediaUrl) {
+  const cleanType = (type || "").split(";")[0].trim().toLowerCase();
+  const byType = {
+    "image/jpeg": ".jpg",
+    "image/jpg": ".jpg",
+    "image/png": ".png",
+    "image/webp": ".webp",
+    "image/avif": ".avif",
+    "image/gif": ".gif",
+    "video/mp4": ".mp4",
+    "video/webm": ".webm",
+    "application/vnd.apple.mpegurl": ".m3u8"
+  };
+  if (byType[cleanType]) return byType[cleanType];
+  try {
+    const ext = path.extname(new URL(mediaUrl).pathname).toLowerCase();
+    if (ext && ext.length <= 6) return ext;
+  } catch {}
+  return "";
+}
+
+function walkJson(value, found) {
+  if (Array.isArray(value)) {
+    for (const item of value) walkJson(item, found);
+    return;
+  }
+  if (!value || typeof value !== "object") return;
+  for (const [key, child] of Object.entries(value)) {
+    if (
+      typeof child === "string" &&
+      ["image","images","contenturl","thumbnailurl","video","url","src","poster"].includes(key.toLowerCase())
+    ) {
+      found.push(child);
+    }
+    walkJson(child, found);
+  }
+}
+
+function extractUrlsFromHtml(html) {
+  const normalized = html.replaceAll("\\u002F", "/").replaceAll("\\/", "/").replaceAll("&amp;", "&");
+  const matches = normalized.match(/https?:\/\/[^"'<>\s]+/g) || [];
+  return matches.map((value) => value.replace(/[),\]}]+$/, ""));
+}
+
+async function collectMedia(page) {
+  const dom = await page.evaluate(() => {
+    const images = new Set();
+    const videos = new Set();
+    const posters = new Set();
+    const jsonLdValues = [];
+    const add = (set, value) => {
+      if (typeof value === "string" && value.trim()) set.add(value.trim());
+    };
+
+    for (const img of document.querySelectorAll("img")) {
+      add(images, img.currentSrc);
+      add(images, img.src);
+      add(images, img.getAttribute("data-src"));
+      add(images, img.getAttribute("data-original"));
+      const srcset = img.getAttribute("srcset");
+      if (srcset) {
+        for (const entry of srcset.split(",")) add(images, entry.trim().split(/\s+/)[0]);
+      }
+    }
+
+    for (const video of document.querySelectorAll("video")) {
+      add(videos, video.currentSrc);
+      add(videos, video.src);
+      add(posters, video.poster);
+      for (const source of video.querySelectorAll("source")) add(videos, source.src);
+    }
+
+    for (const source of document.querySelectorAll("source")) {
+      add(videos, source.getAttribute("src"));
+      const srcset = source.getAttribute("srcset");
+      if (srcset) {
+        for (const entry of srcset.split(",")) add(images, entry.trim().split(/\s+/)[0]);
+      }
+    }
+
+    for (const script of document.querySelectorAll('script[type="application/ld+json"]')) {
+      try {
+        jsonLdValues.push(JSON.parse(script.textContent || ""));
+      } catch {}
+    }
+
+    return {
+      title: document.title,
+      images: [...images],
+      videos: [...videos],
+      posters: [...posters],
+      jsonLdValues,
+      performanceEntries: performance.getEntriesByType("resource").map((entry) => entry.name)
+    };
+  });
+
+  const html = await page.content();
+  return { ...dom, htmlUrls: extractUrlsFromHtml(html) };
+}
+
+function likelyImage(url) {
+  return /\.(?:jpe?g|png|webp|avif|gif)(?:\?|$)/i.test(url) || /img\.kwcdn\.com/i.test(url);
+}
+
+function likelyVideo(url) {
+  return /\.(?:mp4|webm|m3u8)(?:\?|$)/i.test(url) || /video/i.test(url);
+}
+
+async function downloadMedia(request, mediaUrl, folder, index, referer) {
+  try {
+    const response = await request.get(mediaUrl, {
+      headers: {
+        referer,
+        "user-agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 Chrome/131 Safari/537.36"
+      },
+      timeout: 30000
+    });
+
+    if (!response.ok()) return null;
+
+    const type = response.headers()["content-type"] || "";
+    const ext = extensionFromType(type, mediaUrl);
+    const isImage = type.startsWith("image/");
+    const isVideo = type.startsWith("video/") || ext === ".m3u8";
+    if (!isImage && !isVideo) return null;
+
+    const filename = String(index).padStart(3, "0") + (ext || (isImage ? ".jpg" : ".mp4"));
+    await fs.writeFile(path.join(folder, filename), await response.body());
+    return { filename, sourceUrl: mediaUrl, contentType: type };
+  } catch {
+    return null;
+  }
+}
+
+async function importProduct(browser, productUrl) {
+  if (!isTemuUrl(productUrl)) {
+    console.warn("Skipping non-Temu URL:", productUrl);
+    return;
+  }
+
+  const productId = productIdFromUrl(productUrl);
+  const root = path.join(process.cwd(), "data", "imports", productId);
+  const imageDir = path.join(root, "images");
+  const videoDir = path.join(root, "videos");
+  await fs.mkdir(imageDir, { recursive: true });
+  await fs.mkdir(videoDir, { recursive: true });
+
+  const context = await browser.newContext({
+    viewport: { width: 1365, height: 900 },
+    locale: "en-US"
+  });
+  const page = await context.newPage();
+
+  console.log("\nLoading product " + productId);
+  await page.goto(productUrl, { waitUntil: "domcontentloaded", timeout: 60000 });
+  await page.waitForTimeout(6000);
+
+  for (let i = 0; i < 12; i += 1) {
+    await page.mouse.wheel(0, 650);
+    await page.waitForTimeout(400);
+  }
+
+  await page.mouse.wheel(0, -10000);
+  await page.waitForTimeout(1200);
+
+  const collected = await collectMedia(page);
+  const jsonLdUrls = [];
+  for (const value of collected.jsonLdValues) walkJson(value, jsonLdUrls);
+
+  const allCandidates = [
+    ...collected.images,
+    ...collected.videos,
+    ...collected.posters,
+    ...collected.performanceEntries,
+    ...collected.htmlUrls,
+    ...jsonLdUrls
+  ]
+    .map((url) => normalizeMediaUrl(url, page.url()))
+    .filter(Boolean);
+
+  const uniqueCandidates = [...new Set(allCandidates)];
+  const imageUrls = uniqueCandidates.filter(likelyImage);
+  const videoUrls = uniqueCandidates.filter(likelyVideo);
+
+  const downloadedImages = [];
+  let imageIndex = 1;
+  for (const mediaUrl of imageUrls) {
+    const saved = await downloadMedia(context.request, mediaUrl, imageDir, imageIndex, page.url());
+    if (saved) {
+      downloadedImages.push(saved);
+      imageIndex += 1;
+    }
+  }
+
+  const downloadedVideos = [];
+  let videoIndex = 1;
+  for (const mediaUrl of videoUrls) {
+    const saved = await downloadMedia(context.request, mediaUrl, videoDir, videoIndex, page.url());
+    if (saved) {
+      downloadedVideos.push(saved);
+      videoIndex += 1;
+    }
+  }
+
+  const manifest = {
+    importedAt: new Date().toISOString(),
+    source: "Temu",
+    supplierProductId: productId,
+    supplierUrl: productUrl,
+    finalPageUrl: page.url(),
+    pageTitle: collected.title,
+    imageCount: downloadedImages.length,
+    videoCount: downloadedVideos.length,
+    images: downloadedImages,
+    videos: downloadedVideos
+  };
+
+  await fs.writeFile(
+    path.join(root, "manifest.json"),
+    JSON.stringify(manifest, null, 2),
+    "utf8"
+  );
+
+  console.log("Saved " + downloadedImages.length + " images and " + downloadedVideos.length + " videos.");
+  console.log("Folder: " + root);
+  await context.close();
+}
+
+let browser;
+try {
+  browser = await chromium.launch({ channel: "chrome", headless: true });
+  for (const productUrl of args) {
+    await importProduct(browser, productUrl);
+  }
+} catch (error) {
+  console.error("\nTemu import failed.");
+  console.error(error?.message || error);
+  console.error("\nGoogle Chrome must be installed and Temu must open normally on this PC.");
+  process.exitCode = 1;
+} finally {
+  if (browser) await browser.close();
+}
