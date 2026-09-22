@@ -1,4 +1,4 @@
-import { chromium } from "playwright-core";
+import { firefox } from "playwright";
 import fs from "node:fs/promises";
 import path from "node:path";
 import process from "node:process";
@@ -386,17 +386,14 @@ async function importProduct(context, productUrl) {
   await page.close();
 }
 
-const userDataDir = path.join(process.cwd(), ".temu-browser-profile");
+const userDataDir = path.join(process.cwd(), ".temu-firefox-profile");
 
 let context;
 
 try {
-  context = await chromium.launchPersistentContext(userDataDir, {
-    channel: "chrome",
-    headless: false,
+  context = await firefox.launchPersistentContext(userDataDir, {\n    headless: false,
     viewport: { width: 1365, height: 900 },
-    locale: "en-US"
-  });
+    locale: "en-US"\n  });
 
   for (const productUrl of args) {
     await importProduct(context, productUrl);
